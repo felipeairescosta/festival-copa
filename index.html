@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Festival de Praia Christus — Copa 2026</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#0b6e4f" />
 </head>
 <body>
   <div id="app"><div class="loading">Carregando Festival de Praia Christus...</div></div>
@@ -20,5 +22,10 @@
   </script>
   <script src="./data.js" defer></script>
   <script src="./app.js" defer></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function(){ navigator.serviceWorker.register('./sw.js').catch(function(){}); });
+    }
+  </script>
 </body>
 </html>

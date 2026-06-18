@@ -13,6 +13,11 @@ const {
 
 const STORAGE_RESULTS = 'festival-copa-2026:resultados';
 const STORAGE_FAVORITES = 'festival-copa-2026:favoritos';
+const STORAGE_STATUS = 'festival-copa-2026:status';
+const STORAGE_SCORES = 'festival-copa-2026:placares';
+const STORAGE_NOTES = 'festival-copa-2026:observacoes';
+const STORAGE_FAMILY = 'festival-copa-2026:familia';
+const STORAGE_ADMIN = 'festival-copa-2026:admin';
 
 const state = {
   tab: 'jogos',
@@ -24,6 +29,13 @@ const state = {
   data: 'todas',
   campo: 'todos',
   chave: 'todas',
+  periodo: 'todos',
+  onlyFavorites: false,
+  familyQuery: readStorage(STORAGE_FAMILY, ''),
+  admin: readStorage(STORAGE_ADMIN, false),
+  status: readStorage(STORAGE_STATUS, {}),
+  placares: readStorage(STORAGE_SCORES, {}),
+  observacoes: readStorage(STORAGE_NOTES, {}),
   resultados: readStorage(STORAGE_RESULTS, {}),
   favoritos: readStorage(STORAGE_FAVORITES, {}),
   toast: '',
@@ -42,6 +54,29 @@ function readStorage(key, fallback) {
 
 function writeStorage(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function currentUrl() {
+  return location.href.split('#')[0].split('?')[0] || 'https://felipeairescosta.github.io/festival-copa/';
+}
+
+function normalizeText(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function gameHaystack(g) {
+  return normalizeText(`${g.codigo} ${g.chave} ${g.categoria} ${g.time1Display} ${g.time2Display} ${g.campo} ${labelFor(g.modalidade)}`);
+}
+
+function gameMatchesFamily(g) {
+  const q = normalizeText(state.familyQuery);
+  if (!q) return false;
+  return gameHaystack(g).includes(q);
+}
+
+function isGameInAgenda(g) {
+  const favs = favoriteNames();
+  return favs.has(g.time1Display) || favs.has(g.time2Display) || gameMatchesFamily(g);
 }
 
 function el(tag, attrs = {}, children = []) {
@@ -110,15 +145,19 @@ function getConflitos(jogos) {
 }
 
 function filteredGames() {
-  const q = state.search.trim().toLowerCase();
+  const q = normalizeText(state.search);
   return datasetResolved().filter((g) => {
+    if (state.periodo !== 'todos') {
+      const datasOrdenadas = unique(datasetResolved().map((item) => item.data));
+      const alvo = state.periodo === 'dia1' ? datasOrdenadas[0] : state.periodo === 'dia2' ? datasOrdenadas[1] : null;
+      if (alvo && g.data !== alvo) return false;
+      if (state.periodo === 'proximos' && statusJogo(g) === 'past') return false;
+    }
     if (state.data !== 'todas' && g.data !== state.data) return false;
     if (state.campo !== 'todos' && g.campo !== state.campo) return false;
     if (state.chave !== 'todas' && g.chave !== state.chave) return false;
-    if (q) {
-      const hay = `${g.codigo} ${g.chave} ${g.categoria} ${g.time1Display} ${g.time2Display} ${g.campo}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
+    if (state.onlyFavorites && !isGameInAgenda(g)) return false;
+    if (q && !gameHaystack(g).includes(q)) return false;
     return true;
   });
 }
@@ -143,6 +182,8 @@ function resetFiltros() {
   state.data = 'todas';
   state.campo = 'todos';
   state.chave = 'todas';
+  state.periodo = 'todos';
+  state.onlyFavorites = false;
 }
 
 function setEsporte(esporte) {
@@ -175,6 +216,67 @@ function toggleFavorito(gameId, name) {
 
 function isFavorito(gameId, name) {
   return (state.favoritos[gameId] || []).includes(name);
+}
+
+function setFamilyQuery(value) {
+  state.familyQuery = value;
+  writeStorage(STORAGE_FAMILY, state.familyQuery);
+  render();
+}
+
+function setGameStatus(id, value) {
+  if (!value || value === 'auto') delete state.status[id];
+  else state.status[id] = value;
+  writeStorage(STORAGE_STATUS, state.status);
+  updateRealtimePanels();
+  render();
+}
+
+function setPlacar(id, value) {
+  if (!value.trim()) delete state.placares[id];
+  else state.placares[id] = value.trim();
+  writeStorage(STORAGE_SCORES, state.placares);
+  render();
+}
+
+function setObservacao(id, value) {
+  if (!value.trim()) delete state.observacoes[id];
+  else state.observacoes[id] = value.trim();
+  writeStorage(STORAGE_NOTES, state.observacoes);
+  render();
+}
+
+function statusManual(g) {
+  return state.status[g.id] || 'auto';
+}
+
+function statusLabel(g) {
+  const manual = statusManual(g);
+  if (manual !== 'auto') return ({ aguardando: 'Aguardando', andamento: 'Em andamento', encerrado: 'Encerrado', adiado: 'Adiado', cancelado: 'Cancelado' })[manual] || manual;
+  const st = statusJogo(g);
+  return st === 'live' ? 'Em andamento' : st === 'past' ? 'Encerrado' : 'Aguardando';
+}
+
+function shareGame(g) {
+  const text = `${labelFor(g.modalidade)} — ${g.chave} — ${g.codigo}
+${g.time1Display} x ${g.time2Display}
+${g.data} às ${g.hora}
+Local: ${g.campo}
+${currentUrl()}`;
+  const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function printPage(mode) {
+  document.body.dataset.printMode = mode || 'page';
+  window.print();
+  setTimeout(() => { delete document.body.dataset.printMode; }, 500);
+}
+
+function nextGames(limit = 5) {
+  return allResolved().filter((g) => statusJogo(g) !== 'past')
+    .sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora))
+    .slice(0, limit);
 }
 
 function favoriteNames() {
@@ -309,6 +411,10 @@ function mainTabs() {
   return el('nav', { class: 'main-tabs' }, [
     tabBtn('jogos', '▦ Jogos'),
     tabBtn('agenda', `★ Minha Agenda${favCount ? ` (${favCount})` : ''}`),
+    tabBtn('checklist', '☑ Checklist'),
+    tabBtn('mapa', '⌖ Mapa'),
+    tabBtn('campeoes', '🏆 Campeões'),
+    tabBtn('admin', '⚙ Admin'),
     tabBtn('estatisticas', '▰ Estatísticas')
   ]);
 }
@@ -353,20 +459,37 @@ function modalidadeTabs() {
 
 function filters() {
   const data = datasetResolved();
-  return el('section', { class: 'filters' }, [
-    el('input', {
-      class: 'search',
-      value: state.search,
-      placeholder: 'Buscar time, código, categoria ou local...',
-      oninput: (e) => { state.search = e.target.value; render(); }
-    }),
-    select('data', state.data, ['todas', ...unique(data.map((g) => g.data))], (v) => v === 'todas' ? 'Todas as datas' : v),
+  const datas = unique(data.map((g) => g.data));
+  return el('section', { class: 'filters filters--expanded' }, [
+    el('label', { class: 'search-wrap' }, [
+      el('span', {}, ['Buscar por aluno, equipe, turma, código ou local']),
+      el('input', {
+        class: 'search',
+        value: state.search,
+        placeholder: 'Ex.: Leonardo, 5ºAM DT, Quadra 01, JOGO 12...',
+        oninput: (e) => { state.search = e.target.value; render(); }
+      })
+    ]),
+    select('data', state.data, ['todas', ...datas], (v) => v === 'todas' ? 'Todas as datas' : v),
     select('campo', state.campo, ['todos', ...unique(data.map((g) => g.campo))], (v) => v === 'todos' ? 'Todos os locais' : v),
     select('chave', state.chave, ['todas', ...unique(data.map((g) => g.chave))], (v) => v === 'todas' ? 'Todas as chaves' : v),
+    quickFilterButtons(datas),
     el('div', { class: 'view-toggle' }, [
       el('button', { class: state.view === 'cards' ? 'is-active' : '', onclick: () => { state.view = 'cards'; render(); } }, ['Cards']),
       el('button', { class: state.view === 'lista' ? 'is-active' : '', onclick: () => { state.view = 'lista'; render(); } }, ['Lista'])
     ])
+  ]);
+}
+
+function quickFilterButtons(datas) {
+  const btn = (key, label) => el('button', { class: `quick-btn ${state.periodo === key ? 'is-active' : ''}`, onclick: () => { state.periodo = key; state.data = 'todas'; render(); } }, [label]);
+  return el('div', { class: 'quick-filters' }, [
+    btn('todos', 'Todos'),
+    datas[0] ? btn('dia1', datas[0]) : null,
+    datas[1] ? btn('dia2', datas[1]) : null,
+    btn('proximos', 'Próximos'),
+    el('button', { class: `quick-btn ${state.onlyFavorites ? 'is-active' : ''}`, onclick: () => { state.onlyFavorites = !state.onlyFavorites; render(); } }, ['Só minha agenda']),
+    el('button', { class: 'quick-btn', onclick: () => printPage('current') }, ['Imprimir atual'])
   ]);
 }
 
@@ -396,7 +519,9 @@ function jogosView() {
 
   return el('main', { class: 'container' }, [
     modalidadeTabs(),
+    familyPanel(),
     filters(),
+    nextFivePanel(),
     conflitosBanner(conflicts),
     state.toast ? el('div', { class: 'toast' }, [state.toast]) : null,
     grupos.length ? el('div', {}, grupos.map((grupo) => grupoSection(grupo, conflictIds))) : empty('Nenhuma partida encontrada', 'Ajuste os filtros ou a busca para visualizar outros jogos.')
@@ -420,18 +545,27 @@ function grupoSection(grupo, conflictIds) {
 function matchCard(g, conflict) {
   const vencedor = state.resultados[g.id];
   const status = statusJogo(g);
-  return el('article', { class: `card ${g.codigo === 'FINAL' ? 'card--final' : ''} ${vencedor ? 'card--decided' : ''} ${status === 'live' ? 'card--live' : ''}` }, [
+  const manualStatus = statusManual(g);
+  return el('article', { class: `card ${g.codigo === 'FINAL' ? 'card--final' : ''} ${vencedor ? 'card--decided' : ''} ${status === 'live' || manualStatus === 'andamento' ? 'card--live' : ''}` }, [
     el('div', { class: 'card__top' }, [
       el('span', { class: 'code' }, [g.codigo === 'FINAL' ? '🏆 FINAL' : g.codigo]),
-      el('span', { class: 'time' }, [`${status === 'live' ? '● AO VIVO · ' : ''}${conflict ? '⚠ ' : ''}${g.hora}`])
+      el('span', { class: 'time' }, [`${status === 'live' || manualStatus === 'andamento' ? '● AO VIVO · ' : ''}${conflict ? '⚠ ' : ''}${g.hora}`])
     ]),
     teamRow(g, 'time1'),
     el('div', { class: 'versus' }, ['×']),
     teamRow(g, 'time2'),
     el('div', { class: 'card__footer' }, [
       el('span', {}, [`📅 ${g.data}`]),
-      el('span', {}, [`📍 ${g.campo}`])
-    ])
+      el('span', {}, [`📍 ${g.campo}`]),
+      el('span', { class: 'status-pill' }, [`${statusLabel(g)}`]),
+      state.placares[g.id] ? el('span', { class: 'score-pill' }, [`Placar: ${state.placares[g.id]}`]) : null
+    ]),
+    state.observacoes[g.id] ? el('p', { class: 'note' }, [`📝 ${state.observacoes[g.id]}`]) : null,
+    el('div', { class: 'card-actions' }, [
+      el('button', { onclick: () => shareGame(g) }, ['WhatsApp']),
+      el('button', { onclick: () => printPage('current') }, ['Imprimir'])
+    ]),
+    state.admin ? adminInline(g) : null
   ]);
 }
 
@@ -450,14 +584,15 @@ function teamRow(g, lado) {
 }
 
 function matchTable(jogos, conflictIds) {
-  const headerCells = ['Jogo', 'Time 1', '×', 'Time 2', 'Data/Hora', 'Local'].map((h) => el('th', {}, [h]));
+  const headerCells = ['Jogo', 'Time 1', '×', 'Time 2', 'Data/Hora', 'Local', 'Status'].map((h) => el('th', {}, [h]));
   const bodyRows = jogos.map((g) => el('tr', { class: `${state.resultados[g.id] ? 'is-decided' : ''} ${conflictIds.has(g.id) ? 'has-conflict' : ''}` }, [
     el('td', {}, [g.codigo]),
     el('td', {}, [tableTeam(g, 'time1')]),
     el('td', {}, ['×']),
     el('td', {}, [tableTeam(g, 'time2')]),
     el('td', {}, [`${g.data} · ${g.hora}`]),
-    el('td', {}, [g.campo])
+    el('td', {}, [g.campo]),
+    el('td', {}, [statusLabel(g)])
   ]));
 
   return el('div', { class: 'table-wrap' }, [
@@ -476,12 +611,142 @@ function tableTeam(g, lado) {
 
 function agendaView() {
   const favs = favoriteNames();
-  if (!favs.size) return el('main', { class: 'container' }, [empty('Sua agenda está vazia', 'Marque a estrela de um time na aba Jogos para acompanhar apenas as partidas dele.')]);
-  const agenda = allResolved().filter((g) => favs.has(g.time1Display) || favs.has(g.time2Display))
+  const agenda = allResolved().filter((g) => isGameInAgenda(g))
     .sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora));
   return el('main', { class: 'container' }, [
-    el('section', { class: 'agenda-intro' }, [`Acompanhando: ${[...favs].join(', ')}`]),
-    el('div', { class: 'cards' }, agenda.map((g) => matchCard(g, false)))
+    familyPanel(),
+    el('section', { class: 'agenda-intro print-target' }, [
+      el('div', {}, [`Acompanhando: ${[...favs].join(', ') || 'nenhum favorito marcado'}${state.familyQuery ? ` · modo família: ${state.familyQuery}` : ''}`]),
+      el('div', { class: 'agenda-actions' }, [
+        el('button', { class: 'primary', onclick: () => printPage('agenda') }, ['Imprimir minha agenda']),
+        el('button', { class: 'primary', onclick: () => shareAgenda(agenda) }, ['Compartilhar agenda'])
+      ])
+    ]),
+    agenda.length ? el('div', { class: 'cards agenda-cards' }, agenda.map((g) => matchCard(g, false))) : empty('Sua agenda está vazia', 'Marque a estrela de um time ou informe um nome/turma no modo família.')
+  ]);
+}
+
+
+function familyPanel() {
+  return el('section', { class: 'family-panel' }, [
+    el('div', {}, [
+      el('strong', {}, ['Modo família']),
+      el('p', {}, ['Digite o nome do aluno, equipe ou turma uma vez. A agenda será montada automaticamente com os jogos encontrados.'])
+    ]),
+    el('div', { class: 'family-inputs' }, [
+      el('input', { value: state.familyQuery, placeholder: 'Ex.: Leonardo, 5ºAM DT...', oninput: (e) => { state.familyQuery = e.target.value; writeStorage(STORAGE_FAMILY, state.familyQuery); } }),
+      el('button', { class: 'primary', onclick: () => render() }, ['Aplicar']),
+      el('button', { class: 'secondary', onclick: () => setFamilyQuery('') }, ['Limpar'])
+    ])
+  ]);
+}
+
+function nextFivePanel() {
+  const jogos = nextGames(5);
+  if (!jogos.length) return null;
+  return el('section', { class: 'next-five' }, [
+    el('div', { class: 'section-title' }, [el('strong', {}, ['Próximos 5 jogos']), el('span', {}, ['fila geral do evento'])]),
+    el('div', { class: 'mini-list' }, jogos.map((g) => el('button', { onclick: () => { state.search = g.codigo; state.modalidade = g.modalidade; const m = MODALIDADES.find(x => x.key === g.modalidade); state.esporte = m.esporte; state.genero = m.genero; render(); } }, [
+      el('strong', {}, [`${g.hora} · ${g.campo}`]),
+      el('span', {}, [`${labelFor(g.modalidade)} · ${g.chave} · ${g.codigo}`]),
+      el('small', {}, [`${g.time1Display} x ${g.time2Display}`])
+    ])))
+  ]);
+}
+
+function shareAgenda(agenda) {
+  const text = ['Minha agenda — Festival de Praia Christus 2026', '', ...agenda.map((g) => `${g.data} ${g.hora} | ${labelFor(g.modalidade)} | ${g.campo} | ${g.time1Display} x ${g.time2Display}`), '', currentUrl()].join('\n');
+  const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function checklistView() {
+  const items = ['Chegar com antecedência de 30 minutos', 'Levar garrafa de água', 'Conferir campo ou quadra antes do jogo', 'Salvar jogos favoritos na Minha Agenda', 'Compartilhar agenda com a família', 'Acompanhar status e alterações no painel'];
+  return el('main', { class: 'container' }, [
+    el('section', { class: 'tool-card' }, [
+      el('h2', {}, ['Checklist do dia']),
+      el('p', {}, ['Use esta lista simples antes de sair para o festival.']),
+      el('div', { class: 'checklist' }, items.map((item, idx) => el('label', {}, [el('input', { type: 'checkbox', id: `check-${idx}` }), el('span', {}, [item])])))
+    ])
+  ]);
+}
+
+function mapaView() {
+  const locais = unique(allResolved().map((g) => g.campo));
+  return el('main', { class: 'container' }, [
+    el('section', { class: 'tool-card' }, [
+      el('h2', {}, ['Mapa visual dos campos e quadras']),
+      el('p', {}, ['Mapa esquemático para orientação rápida. Ajuste a posição conforme a planta real do local, se necessário.']),
+      el('div', { class: 'map-grid' }, locais.map((local) => el('button', { onclick: () => { state.tab = 'jogos'; state.campo = local; render(); } }, [
+        el('strong', {}, [local]),
+        el('span', {}, [`${allResolved().filter(g => g.campo === local).length} jogos`])
+      ])))
+    ])
+  ]);
+}
+
+function campeoesView() {
+  const finais = allResolved().filter((g) => g.codigo === 'FINAL');
+  return el('main', { class: 'container' }, [
+    el('section', { class: 'tool-card' }, [
+      el('h2', {}, ['Campeões por chave']),
+      el('p', {}, ['Os campeões aparecem automaticamente quando a final recebe vencedor.']),
+      el('div', { class: 'champions-grid' }, finais.map((g) => {
+        const lado = state.resultados[g.id];
+        const campeao = lado ? (lado === 'time1' ? g.time1Display : g.time2Display) : 'Final ainda não decidida';
+        const vice = lado ? (lado === 'time1' ? g.time2Display : g.time1Display) : '—';
+        return el('article', { class: `champion-card ${lado ? 'is-complete' : ''}` }, [
+          el('strong', {}, [`${labelFor(g.modalidade)} · ${g.chave}`]),
+          el('span', {}, [g.categoria]),
+          el('h3', {}, [campeao]),
+          el('small', {}, [`Vice: ${vice}`])
+        ]);
+      }))
+    ])
+  ]);
+}
+
+function adminView() {
+  if (!state.admin) {
+    return el('main', { class: 'container' }, [
+      el('section', { class: 'tool-card' }, [
+        el('h2', {}, ['Painel administrativo']),
+        el('p', {}, ['Use a senha local apenas para liberar edição neste navegador. Senha padrão: festival2026.']),
+        el('input', { id: 'admin-password', type: 'password', placeholder: 'Senha' }),
+        el('button', { class: 'primary', onclick: () => {
+          const v = document.getElementById('admin-password')?.value;
+          if (v === 'festival2026') { state.admin = true; writeStorage(STORAGE_ADMIN, true); showToast('Painel administrativo liberado.'); }
+          else showToast('Senha incorreta.');
+        } }, ['Entrar'])
+      ])
+    ]);
+  }
+  return el('main', { class: 'container' }, [
+    el('section', { class: 'tool-card' }, [
+      el('h2', {}, ['Painel administrativo ativo']),
+      el('p', {}, ['Volte à aba Jogos para editar status, placar e observações em cada card.']),
+      el('button', { class: 'secondary', onclick: () => { state.admin = false; writeStorage(STORAGE_ADMIN, false); render(); } }, ['Sair do modo admin'])
+    ]),
+    nextFivePanel(),
+    el('div', { class: 'cards' }, nextGames(12).map((g) => matchCard(g, false)))
+  ]);
+}
+
+function adminInline(g) {
+  return el('div', { class: 'admin-inline' }, [
+    el('select', { onchange: (e) => setGameStatus(g.id, e.target.value) }, ['auto', 'aguardando', 'andamento', 'encerrado', 'adiado', 'cancelado'].map((v) => el('option', { value: v, selected: statusManual(g) === v }, [v === 'auto' ? 'Status automático' : ({ aguardando: 'Aguardando', andamento: 'Em andamento', encerrado: 'Encerrado', adiado: 'Adiado', cancelado: 'Cancelado' })[v]]))),
+    el('input', { value: state.placares[g.id] || '', placeholder: 'Placar: 2x1', onchange: (e) => setPlacar(g.id, e.target.value) }),
+    el('input', { value: state.observacoes[g.id] || '', placeholder: 'Observação/alteração', onchange: (e) => setObservacao(g.id, e.target.value) })
+  ]);
+}
+
+function qrCodeView() {
+  const url = currentUrl();
+  return el('section', { class: 'tool-card qr-card' }, [
+    el('h2', {}, ['QR Code do site']),
+    el('img', { alt: 'QR Code do site', src: `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(url)}` }),
+    el('p', {}, [url]),
+    el('button', { class: 'primary', onclick: () => navigator.clipboard?.writeText(url).then(() => showToast('Link copiado.')) }, ['Copiar link'])
   ]);
 }
 
@@ -503,7 +768,9 @@ function estatisticasView() {
     ]),
     chartBox('Jogos por esporte e gênero', porModalidade),
     chartBox('Jogos por data', porData),
-    chartBox('Principais locais', porCampo)
+    chartBox('Principais locais', porCampo),
+    qrCodeView(),
+    el('section', { class: 'tool-card' }, [el('h2', {}, ['Instalar no celular']), el('p', {}, ['No Chrome/Android, abra o menu do navegador e toque em “Adicionar à tela inicial”. O site também possui modo offline após o primeiro carregamento.'])])
   ]);
 }
 
@@ -571,6 +838,10 @@ function render() {
   root.append(header(), mainTabs());
   if (state.tab === 'jogos') root.append(jogosView());
   if (state.tab === 'agenda') root.append(agendaView());
+  if (state.tab === 'checklist') root.append(checklistView());
+  if (state.tab === 'mapa') root.append(mapaView());
+  if (state.tab === 'campeoes') root.append(campeoesView());
+  if (state.tab === 'admin') root.append(adminView());
   if (state.tab === 'estatisticas') root.append(estatisticasView());
   root.append(el('footer', { class: 'footer' }, ['Festival de Praia Christus 2026 — versão HTML modularizada']));
 }
