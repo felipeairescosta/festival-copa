@@ -230,7 +230,7 @@ function header() {
     el('div', { class: 'hero__content' }, [
       el('div', { class: 'eyebrow' }, ['🏆 FESTIVAL DE PRAIA CHRISTUS']),
       el('h1', {}, ['COPA ', el('span', {}, ['2026'])]),
-      el('p', { class: 'subtitle' }, [`Tabela interativa por esporte e gênero · ${modalidadeAtual().label} · 20 e 21 de junho`]),
+      el('p', { class: 'subtitle' }, [`Desenvolvido por Felipe Aires Costa (pai do Leonardo Felismino)`]),
       el('div', { class: 'scoreboard' }, [
         metric(data.length, 'partidas'),
         metric(data.filter((g) => state.resultados[g.id]).length, 'decididas'),
