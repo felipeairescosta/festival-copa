@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Festival de Praia Christus — Copa 2026</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app"><div class="loading">Carregando Festival de Praia Christus...</div></div>
+  <script>
+    window.addEventListener('error', function(event) {
+      var root = document.getElementById('app');
+      if (root) {
+        root.innerHTML = '<main class="container"><section class="empty"><strong>Erro ao carregar</strong><p>' +
+          String(event.message || 'Erro desconhecido').replace(/[<>&]/g, function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];}) +
+          '</p><p>Confira se os arquivos data.js, app.js e styles.css estão na mesma pasta do index.html.</p></section></main>';
+      }
+    });
+  </script>
+  <script src="./data.js" defer></script>
+  <script src="./app.js" defer></script>
+</body>
+</html>
