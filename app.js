@@ -740,38 +740,277 @@ function adminInline(g) {
   ]);
 }
 
-function qrCodeView() {
-  const url = currentUrl();
-  return el('section', { class: 'tool-card qr-card' }, [
-    el('h2', {}, ['QR Code do site']),
-    el('img', { alt: 'QR Code do site', src: `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(url)}` }),
-    el('p', {}, [url]),
-    el('button', { class: 'primary', onclick: () => navigator.clipboard?.writeText(url).then(() => showToast('Link copiado.')) }, ['Copiar link'])
-  ]);
-}
-
 function estatisticasView() {
   const todos = allResolved();
   const total = todos.length;
   const decididos = todos.filter((g) => state.resultados[g.id]).length;
+  const progress = total ? Math.round((decididos / total) * 100) : 0;
   const conflicts = getConflitos(todos);
-  const porModalidade = MODALIDADES.map((m) => [m.label, todos.filter((g) => g.modalidade === m.key).length]);
-  const porCampo = countBy(todos, (g) => g.campo).slice(0, 12);
-  const porData = countBy(todos, (g) => g.data);
+  const locais = countBy(todos, (g) => g.campo || 'Sem local');
+  const horarios = countBy(todos, (g) => g.hora || 'Sem horário').sort((a, b) => timeToMinutes(a[0]) - timeToMinutes(b[0]));
+  const categorias = countBy(todos, (g) => g.categoria || 'Sem categoria');
+  const porEsporteGenero = statsPorEsporteGenero(todos);
+  const progressoModalidade = MODALIDADES.map((m) => {
+    const jogos = todos.filter((g) => g.modalidade === m.key);
+    const feitos = jogos.filter((g) => state.resultados[g.id] || ['encerrado', 'cancelado'].includes(statusManual(g))).length;
+    return { label: m.label, esporte: m.esporte, genero: m.genero, total: jogos.length, feitos, percent: jogos.length ? Math.round((feitos / jogos.length) * 100) : 0 };
+  }).filter((x) => x.total);
+  const momento = momentoAtual(todos);
+  const finais = todos.filter((g) => g.codigo === 'FINAL').sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora));
+  const alertas = gerarAlertas(todos, conflicts);
+  const agenda = todos.filter((g) => isGameInAgenda(g)).sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora));
 
-  return el('main', { class: 'container stats' }, [
-    el('section', { class: 'stats-grid' }, [
-      statCard('Total de jogos', total),
-      statCard('Jogos decididos', decididos),
-      statCard('Progresso', `${total ? Math.round((decididos / total) * 100) : 0}%`),
-      statCard('Conflitos', conflicts.length)
+  return el('main', { class: 'container stats stats-plus' }, [
+    el('section', { class: 'stats-hero' }, [
+      el('div', {}, [
+        el('span', { class: 'panel-label panel-label--dark' }, ['Painel de estatísticas']),
+        el('h2', {}, ['Visão geral da competição']),
+        el('p', {}, ['Acompanhamento consolidado por esporte, gênero, local, horário, finais, agenda e alertas.'])
+      ]),
+      el('div', { class: 'stats-actions' }, [
+        el('button', { class: 'primary', onclick: () => printPage('stats') }, ['Imprimir estatísticas']),
+        el('button', { class: 'secondary', onclick: () => { state.tab = 'admin'; render(); } }, ['Atualizar status'])
+      ])
     ]),
-    chartBox('Jogos por esporte e gênero', porModalidade),
-    chartBox('Jogos por data', porData),
-    chartBox('Principais locais', porCampo),
-    qrCodeView(),
+
+    el('section', { class: 'stats-grid stats-grid--six' }, [
+      statCard('Total de jogos', total),
+      statCard('Jogos concluídos', decididos),
+      statCard('Progresso geral', `${progress}%`),
+      statCard('Locais utilizados', locais.length),
+      statCard('Finais', finais.length),
+      statCard('Alertas', alertas.length)
+    ]),
+
+    progressBox('Progresso geral da competição', decididos, total, progress),
+    momentoAtualBox(momento),
+    minhaAgendaStatsBox(agenda),
+
+    el('section', { class: 'stats-two-col' }, [
+      esporteGeneroBox(porEsporteGenero),
+      progressoModalidadeBox(progressoModalidade)
+    ]),
+
+    el('section', { class: 'stats-two-col' }, [
+      locaisBox(locais),
+      timelineBox(horarios)
+    ]),
+
+    el('section', { class: 'stats-two-col' }, [
+      rankingCategoriasBox(categorias),
+      finaisDoDiaBox(finais)
+    ]),
+
+    alertasBox(alertas),
+
+    el('section', { class: 'stats-two-col' }, [
+      chartBox('Gráfico — jogos por esporte/gênero', porEsporteGenero.map((x) => [x.label, x.total])),
+      chartBox('Gráfico — jogos por status', statusChartData(todos))
+    ]),
+    el('section', { class: 'stats-two-col' }, [
+      chartBox('Gráfico — principais locais', locais.slice(0, 10)),
+      chartBox('Gráfico — categorias mais movimentadas', categorias.slice(0, 10))
+    ]),
+
     el('section', { class: 'tool-card' }, [el('h2', {}, ['Instalar no celular']), el('p', {}, ['No Chrome/Android, abra o menu do navegador e toque em “Adicionar à tela inicial”. O site também possui modo offline após o primeiro carregamento.'])])
   ]);
+}
+
+function statsPorEsporteGenero(jogos) {
+  return MODALIDADES.map((m) => {
+    const lista = jogos.filter((g) => g.modalidade === m.key);
+    const concluidos = lista.filter((g) => state.resultados[g.id] || ['encerrado', 'cancelado'].includes(statusManual(g))).length;
+    const finais = lista.filter((g) => g.codigo === 'FINAL').length;
+    const locais = unique(lista.map((g) => g.campo || 'Sem local')).length;
+    return {
+      label: `${m.esporte} · ${m.genero}`,
+      esporte: m.esporte,
+      genero: m.genero,
+      total: lista.length,
+      concluidos,
+      pendentes: Math.max(0, lista.length - concluidos),
+      finais,
+      equipes: estimatedTeams(lista),
+      locais
+    };
+  }).filter((x) => x.total > 0);
+}
+
+function estimatedTeams(jogos) {
+  const nomes = new Set();
+  jogos.forEach((g) => {
+    if (!g.time1Tbd && !/^VENCEDOR/.test(g.time1Display)) nomes.add(g.time1Display);
+    if (!g.time2Tbd && !/^VENCEDOR/.test(g.time2Display)) nomes.add(g.time2Display);
+  });
+  return nomes.size;
+}
+
+function progressBox(title, done, total, percent) {
+  return el('section', { class: 'chart-box progress-card' }, [
+    el('div', { class: 'progress-title' }, [
+      el('h2', {}, [title]),
+      el('strong', {}, [`${done}/${total} · ${percent}%`])
+    ]),
+    el('div', { class: 'progress-track' }, [el('div', { class: 'progress-fill', style: `width:${Math.max(0, Math.min(100, percent))}%` })])
+  ]);
+}
+
+function esporteGeneroBox(rows) {
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Estatísticas por esporte e gênero']),
+    el('div', { class: 'mini-table' }, [
+      miniHeader(['Modalidade', 'Jogos', 'Concl.', 'Pend.', 'Finais', 'Equipes', 'Locais']),
+      ...rows.map((r) => miniRow([r.label, r.total, r.concluidos, r.pendentes, r.finais, r.equipes, r.locais]))
+    ])
+  ]);
+}
+
+function progressoModalidadeBox(rows) {
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Progresso por modalidade']),
+    ...rows.map((r) => el('div', { class: 'progress-mini' }, [
+      el('div', {}, [el('strong', {}, [r.label]), el('span', {}, [`${r.feitos} de ${r.total} concluídos`])]),
+      el('div', { class: 'progress-track progress-track--mini' }, [el('div', { class: 'progress-fill', style: `width:${r.percent}%` })]),
+      el('b', {}, [`${r.percent}%`])
+    ]))
+  ]);
+}
+
+function locaisBox(locais) {
+  const top = locais[0];
+  const last = locais[locais.length - 1];
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Estatísticas por local']),
+    top ? el('p', { class: 'stats-note' }, [`Local com mais jogos: ${top[0]} (${top[1]}). Local com menos jogos: ${last[0]} (${last[1]}).`]) : null,
+    ...locais.slice(0, 14).map(([label, value]) => statLine(label, `${value} jogo(s)`))
+  ]);
+}
+
+function timelineBox(horarios) {
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Linha do tempo por horário']),
+    el('div', { class: 'timeline' }, horarios.map(([hora, qtd]) => el('div', { class: 'timeline-item' }, [
+      el('strong', {}, [hora]),
+      el('span', {}, [`${qtd} jogo(s)`])
+    ])))
+  ]);
+}
+
+function momentoAtual(jogos) {
+  const andamento = jogos.filter((g) => statusJogo(g) === 'live' || statusManual(g) === 'andamento');
+  const agora = state.now;
+  const hojeStr = formatDateBR(agora);
+  const restantesHoje = jogos.filter((g) => g.data === hojeStr && parseDataHora(g.data, g.hora) >= agora).length;
+  const atrasados = jogos.filter((g) => parseDataHora(g.data, g.hora) < agora && !state.resultados[g.id] && ['auto', 'aguardando'].includes(statusManual(g))).length;
+  const proximo = jogos.filter((g) => parseDataHora(g.data, g.hora) >= agora).sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora))[0];
+  const proximaFinal = jogos.filter((g) => g.codigo === 'FINAL' && parseDataHora(g.data, g.hora) >= agora).sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora))[0];
+  return { andamento, restantesHoje, atrasados, proximo, proximaFinal };
+}
+
+function momentoAtualBox(m) {
+  return el('section', { class: 'chart-box now-box' }, [
+    el('h2', {}, ['Momento atual']),
+    el('div', { class: 'stats-grid stats-grid--four compact' }, [
+      statCard('Em andamento', m.andamento.length),
+      statCard('Restantes hoje', m.restantesHoje),
+      statCard('Atrasados/pendentes', m.atrasados),
+      statCard('Próxima final', m.proximaFinal ? m.proximaFinal.hora : '—')
+    ]),
+    m.proximo ? el('p', { class: 'stats-note' }, [`Próximo jogo: ${labelFor(m.proximo.modalidade)} · ${m.proximo.chave} · ${m.proximo.codigo} · ${m.proximo.hora} · ${m.proximo.campo}.`]) : null,
+    m.proximaFinal ? el('p', { class: 'stats-note' }, [`Próxima final: ${labelFor(m.proximaFinal.modalidade)} · ${m.proximaFinal.chave} · ${m.proximaFinal.hora} · ${m.proximaFinal.campo}.`]) : null
+  ]);
+}
+
+function rankingCategoriasBox(categorias) {
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Ranking de categorias mais movimentadas']),
+    ...categorias.slice(0, 12).map(([cat, qtd], idx) => statLine(`${idx + 1}. ${cat}`, `${qtd} jogo(s)`))
+  ]);
+}
+
+function finaisDoDiaBox(finais) {
+  const porData = new Map();
+  finais.forEach((g) => {
+    if (!porData.has(g.data)) porData.set(g.data, []);
+    porData.get(g.data).push(g);
+  });
+  return el('section', { class: 'chart-box' }, [
+    el('h2', {}, ['Finais do dia']),
+    finais.length ? [...porData.entries()].map(([data, jogos]) => el('div', { class: 'final-day' }, [
+      el('strong', {}, [data]),
+      ...jogos.map((g) => el('button', { onclick: () => { state.tab = 'jogos'; state.modalidade = g.modalidade; const m = MODALIDADES.find(x => x.key === g.modalidade); state.esporte = m.esporte; state.genero = m.genero; state.search = g.codigo; render(); } }, [
+        `${g.hora} · ${labelFor(g.modalidade)} · ${g.chave} · ${g.campo}`
+      ]))
+    ])) : el('p', { class: 'stats-note' }, ['Nenhuma final cadastrada.'])
+  ]);
+}
+
+function minhaAgendaStatsBox(agenda) {
+  const hojeStr = formatDateBR(state.now);
+  const hoje = agenda.filter((g) => g.data === hojeStr).length;
+  const finais = agenda.filter((g) => g.codigo === 'FINAL').length;
+  const prox = agenda.filter((g) => parseDataHora(g.data, g.hora) >= state.now).sort((a, b) => parseDataHora(a.data, a.hora) - parseDataHora(b.data, b.hora))[0];
+  return el('section', { class: 'chart-box agenda-stats' }, [
+    el('h2', {}, ['Estatística da Minha Agenda']),
+    el('div', { class: 'stats-grid stats-grid--four compact' }, [
+      statCard('Favoritos/jogos', agenda.length),
+      statCard('Jogos hoje', hoje),
+      statCard('Finais possíveis', finais),
+      statCard('Próximo', prox ? prox.hora : '—')
+    ]),
+    prox ? el('p', { class: 'stats-note' }, [`Próximo da sua agenda: ${labelFor(prox.modalidade)} · ${prox.chave} · ${prox.codigo} · ${prox.data} às ${prox.hora} · ${prox.campo}.`]) : el('p', { class: 'stats-note' }, ['Marque favoritos ou use o Modo família para alimentar este painel.'])
+  ]);
+}
+
+function gerarAlertas(jogos, conflicts) {
+  const alertas = [];
+  conflicts.forEach((grupo) => alertas.push({ tipo: 'Conflito de horário/local', texto: `${grupo[0].campo} · ${grupo[0].data} · ${grupo[0].hora} possui ${grupo.length} jogos simultâneos.` }));
+  jogos.filter((g) => !g.campo || !g.hora || !g.data).forEach((g) => alertas.push({ tipo: 'Cadastro incompleto', texto: `${labelFor(g.modalidade)} · ${g.chave} · ${g.codigo} está sem data, hora ou local.` }));
+  jogos.filter((g) => parseDataHora(g.data, g.hora) < state.now && !state.resultados[g.id] && ['auto', 'aguardando'].includes(statusManual(g))).slice(0, 30).forEach((g) => alertas.push({ tipo: 'Pendente após horário', texto: `${labelFor(g.modalidade)} · ${g.chave} · ${g.codigo} (${g.data} ${g.hora}) ainda não tem vencedor/status final.` }));
+  jogos.filter((g) => g.codigo === 'FINAL' && !state.resultados[g.id]).forEach((g) => alertas.push({ tipo: 'Final sem campeão', texto: `${labelFor(g.modalidade)} · ${g.chave} · ${g.data} ${g.hora} ainda não possui campeão definido.` }));
+  return alertas;
+}
+
+function alertasBox(alertas) {
+  return el('section', { class: 'chart-box alerts-box' }, [
+    el('h2', {}, ['Painel de alertas']),
+    alertas.length ? el('div', { class: 'alerts-list' }, alertas.slice(0, 60).map((a) => el('article', {}, [
+      el('strong', {}, [a.tipo]),
+      el('span', {}, [a.texto])
+    ]))) : el('p', { class: 'stats-note' }, ['Nenhum alerta encontrado no momento.'])
+  ]);
+}
+
+function statusChartData(jogos) {
+  const labels = ['Aguardando', 'Em andamento', 'Encerrado', 'Adiado', 'Cancelado'];
+  const counts = new Map(labels.map((l) => [l, 0]));
+  jogos.forEach((g) => {
+    const l = statusLabel(g);
+    counts.set(l, (counts.get(l) || 0) + 1);
+  });
+  return [...counts.entries()].filter(([, v]) => v > 0);
+}
+
+function statLine(label, value) {
+  return el('div', { class: 'stat-line' }, [el('span', {}, [label]), el('strong', {}, [value])]);
+}
+
+function miniHeader(cells) {
+  return el('div', { class: 'mini-row mini-row--header' }, cells.map((c) => el('strong', {}, [c])));
+}
+
+function miniRow(cells) {
+  return el('div', { class: 'mini-row' }, cells.map((c) => el('span', {}, [c])));
+}
+
+function formatDateBR(date) {
+  return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+}
+
+function timeToMinutes(hora) {
+  const m = String(hora || '').match(/(\d{1,2})h(\d{2})?/i);
+  if (!m) return 99999;
+  return Number(m[1]) * 60 + Number(m[2] || 0);
 }
 
 function countBy(items, fn) {
